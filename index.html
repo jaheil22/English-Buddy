@@ -27,6 +27,7 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
+        // Note: The environment provides the key automatically at runtime.
         const apiKey = ""; 
         const MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
         const TTS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent";
@@ -45,6 +46,7 @@
             const [inputValue, setInputValue] = useState('');
             const [isListening, setIsListening] = useState(false);
             const [isLoading, setIsLoading] = useState(false);
+            const [error, setError] = useState(null);
             const chatEndRef = useRef(null);
             const recognitionRef = useRef(null);
 
@@ -100,6 +102,7 @@
                 if (!currentText && messages.length > 0) return;
 
                 setIsLoading(true);
+                setError(null);
                 
                 let newMsgs = [...messages];
                 if (currentText) {
@@ -120,20 +123,31 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: newMsgs.length > 0 
-                                ? newMsgs.map(m => ({ role: m.role, parts: [{ text: m.text }] }))
+                                ? newMsgs.map(m => ({ 
+                                    role: m.role === 'user' ? 'user' : 'model', 
+                                    parts: [{ text: m.text }] 
+                                  }))
                                 : [{ role: 'user', parts: [{ text: `Hi! Let's talk about ${topic.name}.` }] }],
                             systemInstruction: { parts: [{ text: sysPrompt }] }
                         })
                     });
+
+                    if (!res.ok) {
+                        const errData = await res.json();
+                        throw new Error(errData.error?.message || "Connection failed");
+                    }
 
                     const data = await res.json();
                     if (data.candidates && data.candidates[0]) {
                         const aiText = data.candidates[0].content.parts[0].text;
                         setMessages(prev => [...prev, { role: 'model', text: aiText }]);
                         playVoice(aiText);
+                    } else {
+                        throw new Error("No response from AI");
                     }
                 } catch (e) {
                     console.error("AI Error:", e);
+                    setError(e.message);
                 } finally {
                     setIsLoading(false);
                 }
@@ -162,28 +176,40 @@
                 <div className="glass-card rounded-3xl flex flex-col h-[600px] overflow-hidden">
                     <div className="p-4 border-b flex justify-between items-center bg-slate-50">
                         <div className="font-bold flex items-center gap-2"><span>{selectedTopic.emoji}</span>{selectedTopic.name}</div>
-                        <button onClick={() => {setStep('menu'); setMessages([]);}} className="text-xs font-bold text-slate-400 hover:text-red-500">BACK</button>
+                        <button onClick={() => {setStep('menu'); setMessages([]); setError(null);}} className="text-xs font-bold text-slate-400 hover:text-red-500">BACK</button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
-                        {messages.length === 0 && (
+                        {error && (
+                            <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-sm flex items-start gap-3">
+                                <i data-lucide="alert-circle" className="w-5 h-5 flex-shrink-0"></i>
+                                <div>
+                                    <p className="font-bold">Connection Issue</p>
+                                    <p className="text-xs opacity-80">{error}</p>
+                                    <button onClick={() => handleAction(selectedTopic)} className="mt-2 text-xs font-bold underline">Try Again</button>
+                                </div>
+                            </div>
+                        )}
+                        
+                        {messages.length === 0 && !error && (
                             <div className="flex flex-col items-center justify-center h-full text-center p-6">
                                 <p className="text-slate-500 mb-6 font-medium">Ready to start your conversation about {selectedTopic.name}?</p>
                                 <button 
                                     onClick={() => handleAction(selectedTopic)} 
                                     disabled={isLoading}
-                                    className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg"
+                                    className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg flex items-center gap-2"
                                 >
-                                    {isLoading ? "Loading..." : "Click to Start"}
+                                    {isLoading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
+                                    {isLoading ? "Starting..." : "Click to Start"}
                                 </button>
                             </div>
                         )}
                         {messages.map((m, i) => (
                             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] p-4 rounded-2xl text-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'}`}>
+                                <div className={`max-w-[85%] p-4 rounded-2xl text-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none shadow-sm' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'}`}>
                                     {m.text}
                                     {m.role === 'model' && (
-                                        <button onClick={() => playVoice(m.text)} className="mt-2 block text-[10px] font-bold text-indigo-500 uppercase flex items-center gap-1">
+                                        <button onClick={() => playVoice(m.text)} className="mt-2 block text-[10px] font-bold text-indigo-500 uppercase flex items-center gap-1 hover:text-indigo-700 transition-colors">
                                             <i data-lucide="volume-2" className="w-3 h-3"></i> Listen
                                         </button>
                                     )}
@@ -196,11 +222,11 @@
 
                     <div className="p-4 bg-slate-50 border-t">
                         <div className="flex gap-2">
-                            <button onClick={toggleMic} className={`p-4 rounded-xl border ${isListening ? 'mic-active' : 'bg-white border-slate-200 text-slate-400'}`}>
+                            <button onClick={toggleMic} className={`p-4 rounded-xl border transition-all ${isListening ? 'mic-active' : 'bg-white border-slate-200 text-slate-400'}`}>
                                 <i data-lucide={isListening ? "mic" : "mic-off"}></i>
                             </button>
                             <input value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAction(selectedTopic)} placeholder="Type or speak..." className="flex-1 border-slate-200 border rounded-xl px-4 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
-                            <button onClick={() => handleAction(selectedTopic)} className="p-4 bg-indigo-600 text-white rounded-xl shadow-sm"><i data-lucide="send"></i></button>
+                            <button onClick={() => handleAction(selectedTopic)} disabled={isLoading} className="p-4 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 active:scale-95 transition-all"><i data-lucide="send"></i></button>
                         </div>
                     </div>
                 </div>
