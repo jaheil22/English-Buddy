@@ -11,7 +11,7 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&display=swap');
-        body { font-family: 'Outfit', sans-serif; background: #f1f5f9; color: #1e293b; }
+        body { font-family: 'Outfit', sans-serif; background: #f8fafc; color: #1e293b; }
         .glass-card { background: white; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); }
         .mic-active { animation: pulse-red 1.5s infinite; background: #ef4444 !important; color: white !important; }
         @keyframes pulse-red {
@@ -27,16 +27,16 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // Note: The environment provides the key automatically at runtime.
+        // Configuration
         const apiKey = ""; 
-        const MODEL_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
-        const TTS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent";
+        const MODEL_NAME = "gemini-1.5-flash"; // More stable for general use
+        const MODEL_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
 
         const TOPICS = [
-            { id: 'travel', name: 'Travel & Culture', emoji: '✈️', prompt: 'a travel guide helping me plan a trip' },
-            { id: 'food', name: 'Food & Cooking', emoji: '🍳', prompt: 'a friendly chef talking about food' },
-            { id: 'hobbies', name: 'Hobbies & Life', emoji: '🎸', prompt: 'a friend asking about my interests' },
-            { id: 'goals', name: 'Future & Work', emoji: '🚀', prompt: 'a career coach talking about my dreams' }
+            { id: 'travel', name: 'Travel & Culture', emoji: '✈️' },
+            { id: 'food', name: 'Food & Cooking', emoji: '🍳' },
+            { id: 'hobbies', name: 'Hobbies & Life', emoji: '🎸' },
+            { id: 'goals', name: 'Future & Work', emoji: '🚀' }
         ];
 
         function App() {
@@ -44,109 +44,54 @@
             const [selectedTopic, setSelectedTopic] = useState(null);
             const [messages, setMessages] = useState([]);
             const [inputValue, setInputValue] = useState('');
-            const [isListening, setIsListening] = useState(false);
             const [isLoading, setIsLoading] = useState(false);
             const [error, setError] = useState(null);
+            
             const chatEndRef = useRef(null);
-            const recognitionRef = useRef(null);
 
             useEffect(() => {
                 if (window.lucide) window.lucide.createIcons();
                 chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-            }, [messages, isListening, step]);
+            }, [messages, step]);
 
-            const playVoice = async (text) => {
-                const cleanText = text.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '').trim();
-                try {
-                    const res = await fetch(`${TTS_URL}?key=${apiKey}`, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: cleanText }] }],
-                            generationConfig: { 
-                                responseModalities: ["AUDIO"], 
-                                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } } 
-                            }
-                        })
-                    });
-                    const data = await res.json();
-                    const b64 = data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-                    if (b64) {
-                        const audio = new Audio("data:audio/wav;base64," + b64);
-                        audio.play().catch(e => console.log("Audio blocked. Click to enable."));
-                    }
-                } catch (e) { console.error("Voice error:", e); }
-            };
-
-            const toggleMic = () => {
-                const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-                if (!SpeechRec) return alert("Please use Google Chrome for microphone features.");
-
-                if (!recognitionRef.current) {
-                    recognitionRef.current = new SpeechRec();
-                    recognitionRef.current.lang = 'en-US';
-                    recognitionRef.current.onstart = () => setIsListening(true);
-                    recognitionRef.current.onend = () => setIsListening(false);
-                    recognitionRef.current.onresult = (e) => {
-                        const transcript = e.results[0][0].transcript;
-                        setInputValue(transcript);
-                        handleAction(selectedTopic, transcript);
-                    };
-                }
-
-                if (isListening) recognitionRef.current.stop();
-                else recognitionRef.current.start();
-            };
-
-            const handleAction = async (topic, text = null) => {
-                const currentText = text || inputValue;
-                if (!currentText && messages.length > 0) return;
-
+            const handleAction = async (topic, userText = null) => {
                 setIsLoading(true);
                 setError(null);
-                
-                let newMsgs = [...messages];
-                if (currentText) {
-                    newMsgs = [...newMsgs, { role: 'user', text: currentText }];
-                    setMessages(newMsgs);
+
+                const currentHistory = [...messages];
+                if (userText) {
+                    currentHistory.push({ role: 'user', parts: [{ text: userText }] });
+                    setMessages(currentHistory);
                     setInputValue('');
                 }
 
-                const sysPrompt = `You are a patient English Tutor. Topic: ${topic.name}. 
-                1. Use simple English. 
-                2. Put gentle corrections in (). 
-                3. Put Spanish translations in []. 
-                4. End with a simple question.`;
+                const systemPrompt = `You are a patient English Tutor. Topic: ${topic.name}. 
+                Use simple English. If the student makes a mistake, put the correction in (). 
+                End with a simple question.`;
 
                 try {
-                    const res = await fetch(`${MODEL_URL}?key=${apiKey}`, {
+                    const response = await fetch(`${MODEL_URL}?key=${apiKey}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: newMsgs.length > 0 
-                                ? newMsgs.map(m => ({ 
-                                    role: m.role === 'user' ? 'user' : 'model', 
-                                    parts: [{ text: m.text }] 
-                                  }))
-                                : [{ role: 'user', parts: [{ text: `Hi! Let's talk about ${topic.name}.` }] }],
-                            systemInstruction: { parts: [{ text: sysPrompt }] }
+                            contents: currentHistory.length > 0 ? currentHistory : [{ role: 'user', parts: [{ text: `Hi! I want to practice English about ${topic.name}.` }] }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] }
                         })
                     });
 
-                    if (!res.ok) {
-                        const errData = await res.json();
-                        throw new Error(errData.error?.message || "Connection failed");
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(`API Error: ${response.status}`);
                     }
 
-                    const data = await res.json();
+                    const data = await response.json();
                     if (data.candidates && data.candidates[0]) {
                         const aiText = data.candidates[0].content.parts[0].text;
-                        setMessages(prev => [...prev, { role: 'model', text: aiText }]);
-                        playVoice(aiText);
+                        setMessages(prev => [...prev, { role: 'model', parts: [{ text: aiText }] }]);
                     } else {
-                        throw new Error("No response from AI");
+                        throw new Error("No response from Tutor.");
                     }
                 } catch (e) {
-                    console.error("AI Error:", e);
                     setError(e.message);
                 } finally {
                     setIsLoading(false);
@@ -159,11 +104,12 @@
                         <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-6 shadow-lg shadow-indigo-200">
                             <i data-lucide="languages" className="w-8 h-8"></i>
                         </div>
-                        <h1 className="text-3xl font-extrabold text-slate-900 mb-2 text-center">English Buddy</h1>
-                        <p className="text-slate-500 mb-8">Choose a topic to practice speaking!</p>
-                        <div className="grid gap-4">
+                        <h1 className="text-3xl font-extrabold text-slate-900 mb-2">English Buddy</h1>
+                        <p className="text-slate-500 mb-8">Pick a topic to start talking!</p>
+                        <div className="grid gap-3">
                             {TOPICS.map(t => (
-                                <button key={t.id} onClick={() => {setStep('chat'); setSelectedTopic(t);}} className="flex items-center gap-4 p-5 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all text-left font-bold text-slate-700">
+                                <button key={t.id} onClick={() => {setStep('chat'); setSelectedTopic(t); handleAction(t);}} 
+                                    className="flex items-center gap-4 p-5 rounded-2xl border-2 border-slate-100 hover:border-indigo-500 hover:bg-indigo-50 transition-all text-left font-bold text-slate-700">
                                     <span className="text-2xl">{t.emoji}</span> {t.name}
                                 </button>
                             ))}
@@ -175,58 +121,49 @@
             return (
                 <div className="glass-card rounded-3xl flex flex-col h-[600px] overflow-hidden">
                     <div className="p-4 border-b flex justify-between items-center bg-slate-50">
-                        <div className="font-bold flex items-center gap-2"><span>{selectedTopic.emoji}</span>{selectedTopic.name}</div>
-                        <button onClick={() => {setStep('menu'); setMessages([]); setError(null);}} className="text-xs font-bold text-slate-400 hover:text-red-500">BACK</button>
+                        <div className="font-bold flex items-center gap-2">
+                            <span>{selectedTopic?.emoji}</span> {selectedTopic?.name}
+                        </div>
+                        <button onClick={() => {setStep('menu'); setMessages([]); setError(null);}} className="text-xs font-bold text-slate-400 hover:text-red-500 uppercase tracking-widest">Back</button>
                     </div>
 
                     <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
-                        {error && (
-                            <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-sm flex items-start gap-3">
-                                <i data-lucide="alert-circle" className="w-5 h-5 flex-shrink-0"></i>
-                                <div>
-                                    <p className="font-bold">Connection Issue</p>
-                                    <p className="text-xs opacity-80">{error}</p>
-                                    <button onClick={() => handleAction(selectedTopic)} className="mt-2 text-xs font-bold underline">Try Again</button>
-                                </div>
+                        {messages.length === 0 && isLoading && (
+                            <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                                <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                <p className="text-xs font-bold uppercase">Connecting...</p>
                             </div>
                         )}
                         
-                        {messages.length === 0 && !error && (
-                            <div className="flex flex-col items-center justify-center h-full text-center p-6">
-                                <p className="text-slate-500 mb-6 font-medium">Ready to start your conversation about {selectedTopic.name}?</p>
-                                <button 
-                                    onClick={() => handleAction(selectedTopic)} 
-                                    disabled={isLoading}
-                                    className="bg-indigo-600 text-white px-8 py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all shadow-lg flex items-center gap-2"
-                                >
-                                    {isLoading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>}
-                                    {isLoading ? "Starting..." : "Click to Start"}
-                                </button>
+                        {error && (
+                            <div className="p-4 bg-red-50 text-red-600 rounded-xl text-xs border border-red-100">
+                                <strong>Error:</strong> {error}. <button onClick={() => handleAction(selectedTopic)} className="underline">Retry</button>
                             </div>
                         )}
+
                         {messages.map((m, i) => (
                             <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                <div className={`max-w-[85%] p-4 rounded-2xl text-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none shadow-sm' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'}`}>
-                                    {m.text}
-                                    {m.role === 'model' && (
-                                        <button onClick={() => playVoice(m.text)} className="mt-2 block text-[10px] font-bold text-indigo-500 uppercase flex items-center gap-1 hover:text-indigo-700 transition-colors">
-                                            <i data-lucide="volume-2" className="w-3 h-3"></i> Listen
-                                        </button>
-                                    )}
+                                <div className={`max-w-[85%] p-4 rounded-2xl text-sm shadow-sm ${m.role === 'user' ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'}`}>
+                                    {m.parts[0].text}
                                 </div>
                             </div>
                         ))}
-                        {isLoading && messages.length > 0 && <div className="text-[10px] text-indigo-500 font-bold animate-pulse uppercase tracking-wider">Tutor is thinking...</div>}
+                        {isLoading && messages.length > 0 && <div className="text-[10px] text-indigo-500 font-bold animate-pulse uppercase pl-2">Thinking...</div>}
                         <div ref={chatEndRef} />
                     </div>
 
                     <div className="p-4 bg-slate-50 border-t">
                         <div className="flex gap-2">
-                            <button onClick={toggleMic} className={`p-4 rounded-xl border transition-all ${isListening ? 'mic-active' : 'bg-white border-slate-200 text-slate-400'}`}>
-                                <i data-lucide={isListening ? "mic" : "mic-off"}></i>
+                            <input 
+                                value={inputValue} 
+                                onChange={e => setInputValue(e.target.value)} 
+                                onKeyDown={e => e.key === 'Enter' && handleAction(selectedTopic, inputValue)}
+                                placeholder="Type your message..." 
+                                className="flex-1 border-slate-200 border rounded-xl px-4 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white py-3 shadow-inner" 
+                            />
+                            <button onClick={() => handleAction(selectedTopic, inputValue)} disabled={isLoading} className="px-6 bg-indigo-600 text-white rounded-xl shadow-md hover:bg-indigo-700 active:scale-95 transition-all">
+                                <i data-lucide="send" className="w-5 h-5"></i>
                             </button>
-                            <input value={inputValue} onChange={e => setInputValue(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAction(selectedTopic)} placeholder="Type or speak..." className="flex-1 border-slate-200 border rounded-xl px-4 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
-                            <button onClick={() => handleAction(selectedTopic)} disabled={isLoading} className="p-4 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 active:scale-95 transition-all"><i data-lucide="send"></i></button>
                         </div>
                     </div>
                 </div>
